@@ -467,11 +467,9 @@ def graph_stats(args):
 
 @command('create-lang-graph')
 def create_lang_graph(args):
-    """Generates a graph of languages. Each node is a language, languages in the graph
-    are connected if they have enough colexifications in common. You can set the threshold
-    using the -t flag
+    """Generate a graph of languages joined by colexifications in common.
 
-    e.g. clics create_lang_graph -t 5
+    e.g. clics -t 5 -g new_graph create-language-graph
     """
 
     args.api._log = args.log
