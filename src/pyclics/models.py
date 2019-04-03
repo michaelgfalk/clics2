@@ -50,6 +50,11 @@ class Variety(WithGid):
             },
             **kw)
 
+    def as_node_attrs(self):
+        # Get dict of Variety attributes
+        out = vars(self)
+        # Only keep attributes that aren't null (to avoid graphml problem)
+        return {key:value for key,value in out.items() if value is not None}
 
 @attr.s
 class Form(WithGid):

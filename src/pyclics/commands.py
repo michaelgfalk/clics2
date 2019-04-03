@@ -18,7 +18,9 @@ import networkx as nx
 from networkx.readwrite import json_graph
 from tabulate import tabulate
 
-from pyclics.util import full_colexification, networkx2igraph
+from pyclics.util import full_colexification, networkx2igraph, get_denoted_concepts
+
+import pickle as p
 
 
 @command('datasets')
@@ -120,30 +122,42 @@ def colexification(args):
     def clean(word):
         return ''.join([w for w in word if w not in '/,;"'])
 
-    varieties = args.api.db.varieties
-    lgeo = geojson.FeatureCollection([v.as_geojson() for v in varieties])
-    args.api.json_dump(lgeo, 'app', 'source', 'langsGeo.json')
+    # Get data about languages
+    varieties = args.api.db.varieties # Create list of languages
+    lgeo = geojson.FeatureCollection([v.as_geojson() for v in varieties]) # Generate geoJSON
+    args.api.json_dump(lgeo, 'app', 'source', 'langsGeo.json') # Save geoJSON
 
+    # Copy the 'app' directory from pyclics to the current working directory
+    # This contains all the html/css/js files for the 'Local CLICS browser'
     app_source = args.api.existing_dir('app', 'source')
     for p in Path(__file__).parent.joinpath('app').iterdir():
         target_dir = app_source.parent if p.suffix == '.html' else app_source
         shutil.copy(str(p), str(target_dir / p.name))
 
+    # Begin generating graph. Create a node for each concept
     args.log.info('Adding nodes to the graph')
     G = nx.Graph()
     for concept in args.api.db.iter_concepts():
         G.add_node(concept.id, **concept.as_node_attrs())
 
+    # Add edges between the concepts if they are colexified in enough languages/families
     args.log.info('Adding edges to the graph')
+    # Iterate over languages
     for v_, forms in tqdm(args.api.db.iter_wordlists(varieties), total=len(varieties), leave=False):
+        # Compute all colexifications for the next language
+        # full_colexifications returns a dict with the clics_forms for keys,
+        # and a list of concepts for each form as values
         cols = full_colexification(forms)
 
-        for k, v in cols.items():
+        for _, v in cols.items():
             for formA, formB in combinations(v, r=2):
-                # check for identical concept resulting from word-variants
+                # If the two words are not just synonyms/word variants...
                 if formA.concepticon_id != formB.concepticon_id:
+                    # ... then add them to the 'words' dict
                     words[formA.gid] = [formA.clics_form, formA.form]
+                    # If the edge isn't already in the graph...
                     if not G[formA.concepticon_id].get(formB.concepticon_id, False):
+                        # ... add it
                         G.add_edge(
                             formA.concepticon_id,
                             formB.concepticon_id,
@@ -153,6 +167,8 @@ def colexification(args):
                             wofam=[],
                         )
 
+                    # The edge was either already here or has been added. Now update
+                    # its attributes
                     G[formA.concepticon_id][formB.concepticon_id]['words'].add(
                         (formA.gid, formB.gid))
                     G[formA.concepticon_id][formB.concepticon_id]['languages'].add(v_.gid)
@@ -448,3 +464,89 @@ def graph_stats(args):
         ['components', len(nw.components(graph))],
         ['communities', len(nw.communities(graph))]
     ]))
+
+@command('create-lang-graph')
+def create_lang_graph(args):
+    """Generates a graph of languages. Each node is a language, languages in the graph
+    are connected if they have enough colexifications in common. You can set the threshold
+    using the -t flag
+
+    e.g. clics create_lang_graph -t 5
+    """
+
+    args.api._log = args.log
+    threshold = args.threshold or 1
+    colex_features = defaultdict(set)
+
+    # Get language data
+    varieties = args.api.db.varieties # Create list of languages
+
+    # Begin generating graph. Create a node for each language
+    args.log.info('Adding nodes to the graph')
+    G = nx.Graph()
+    for variety in varieties:
+        G.add_node((variety.gid), **variety.as_node_attrs())
+    
+    # Loop through languages, storing them at relevant places in the combined dict
+    args.log.info('Extracting colexifications from languages')
+    for variety, forms in tqdm(args.api.db.iter_wordlists(varieties), total=len(varieties), leave=False):
+        # var is a Variety object, giving the language's info from LanguageTable
+        # forms is a list of Form objects each representing a row from FormTable
+
+        # Extract language id as a hashable
+        lang = variety.gid
+
+        # Calculate all colexifications for this language
+        cons = get_denoted_concepts(forms)
+
+        for _, v in cons.items():
+            # Each time this language colexifies two concepts ...
+            for (conceptA, conceptB) in combinations(v, r=2):
+                # ... add the language to the dict of colexifications
+                colex_features[(conceptA, conceptB)].add(lang)
+
+    # Save colexification data:
+    args.api.json_dump({'-'.join(key):value for key,value in colex_features}, 'lang_graphs', 'all_colexifications.json')
+
+    args.log.info('Adding edges to graph')
+    # Consider each colexification in turn
+    for colex, langs in tqdm(colex_features.items(), total=len(colex_features), leave = False):
+        # colex is a tuple of form (conceptA, conceptB)
+        # langs is a set of tuples of form (source, id)
+
+        for langA, langB in combinations(langs, r = 2):
+            # Check that the edge isn't already in the graph
+            if not G[langA].get(langB, False):
+                # ... if it isn't, add it
+                G.add_edge(
+                    langA,
+                    langB,
+                    colexifications=set(),
+                    weight=int()
+                )
+
+            # Record the colexification as an edge attribute
+            G[langA][langB]['colexifications'].add(colex)
+            G[langA][langB]['weight'] += 1
+
+    # Apply threshold and reformat data for export
+    ignore_edges = []
+    for nodeA, nodeB, data in G.edges(data=True):
+        # Concatenate each colexification tuple
+        data['colexifications'] = ['='.join(tup) for tup in data['colexifications']]
+        # Concatenate the list of all colexifications
+        data['colexifications'] = ','.join(data['colexifications'])
+        if data['weight'] < threshold:
+            ignore_edges.append((nodeA, nodeB))
+
+    G.remove_edges_from(ignore_edges)
+
+    args.api.save_lang_graph(
+        graph = G,
+        network = args.graphname or 'language-graph',
+        threshold = threshold,
+        edgefilter = 'colexifications'
+        )
+    
+    with open("nx_graph.p", "wb") as f:
+        p.dump(G, f)

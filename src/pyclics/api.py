@@ -57,6 +57,10 @@ class Clics(API):
     def save_graph(self, graph, network, threshold, edgefilter):
         network = Network(network, threshold, edgefilter, self.existing_dir('graphs'))
         return self.file_written(network.save(graph))
+    
+    def save_lang_graph(self, graph, network, threshold, edgefilter):
+        network = Network(network, threshold, edgefilter, self.existing_dir('lang_graphs'))
+        return self.file_written(network.save(graph))
 
     def load_graph(self, network, threshold, edgefilter):
         return Network(network, threshold, edgefilter, self.existing_dir('graphs')).graph

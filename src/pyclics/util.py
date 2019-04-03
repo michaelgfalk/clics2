@@ -44,3 +44,21 @@ def full_colexification(forms):
         if form.clics_form and form.concepticon_id:
             cols[form.clics_form].append(form)
     return cols
+
+def get_denoted_concepts(forms):
+    """
+    Similar to above, but instead of returning a list of colexified Form
+    objects for each clics_form, this function returns a set of all the concepts.
+
+    :param forms: The forms of a wordlist.
+
+    :return: colex_features, a dict taking the clics_forms as keys, and sets of
+        all denoted concepts as values
+    :rtype: dict
+
+    """
+    cons = defaultdict(set)
+    for form in forms:
+        if form.clics_form and form.concepticon_id:
+            cons[form.clics_form].add(form.concepticon_id)
+    return cons
